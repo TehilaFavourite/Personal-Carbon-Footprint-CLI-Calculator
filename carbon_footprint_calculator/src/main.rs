@@ -1,3 +1,7 @@
+#![allow(dead_code)]
+use serde::Serialize;
+use clap::{Parser, Subcommand};
+
 mod emission_factors {
     // --- Transport ---
     pub const PETROL_KG_PER_LITRE: f64 = 2.31;
@@ -148,7 +152,7 @@ struct WasteEntry {
     weight_kg: f64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 struct CarbonReport {
     travel_co2e: f64,
     energy_co2e: f64,
@@ -342,8 +346,132 @@ fn generate_report(activities: &Vec<Activity>) -> CarbonReport {
     }
 }
 
+fn save_report_as_json(report: &CarbonReport, filename: &str) {
+    let json = serde_json::to_string_pretty(report)
+        .expect("Failed to serialize report");
+
+    std::fs::write(filename, json)
+        .expect("Failed to write file");
+
+    println!("Report saved to {}", filename);
+}
+
+#[derive(Parser)]
+#[command(name = "carbon")]
+#[command(about = "Calculate your carbon footprint")]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Calculate travel emissions
+    Travel {
+        #[arg(long)]
+        distance: f64,
+
+        #[arg(long, default_value = "petrol")]
+        fuel: String,
+
+        #[arg(long, default_value = "8.0")]
+        consumption: f64,
+    },
+
+    /// Calculate home energy emissions
+    Energy {
+        #[arg(long)]
+        kwh: Option<f64>,
+
+        #[arg(long)]
+        gas: Option<f64>,
+    },
+
+    /// Calculate diet emissions
+    Diet {
+        #[arg(long, default_value = "none")]
+        protein: String,
+
+        #[arg(long, default_value = "0.0")]
+        servings: f64,
+
+        #[arg(long, default_value = "0.0")]
+        waste: f64,
+    },
+}
+
 fn main() {
-    println!("Hello, world!");
+    let cli = Cli::parse();
+
+    let activity = match cli.command {
+        Commands::Travel { distance, fuel, consumption } => {
+            let fuel_type = match fuel.as_str() {
+                "petrol"   => FuelType::Petrol,
+                "diesel"   => FuelType::Diesel,
+                "electric" => FuelType::Electric,
+                _          => {
+                    println!("Unknown fuel type. Use: petrol, diesel, electric");
+                    return;
+                }
+            };
+            Activity::Travel(TravelDetails {
+                distance_km: distance,
+                mode: TransportMode::Car {
+                    fuel_type,
+                    consumption_l_per_100km: consumption,
+                },
+            })
+        },
+
+        Commands::Energy { kwh, gas } => {
+            let electricity = kwh.map(|k| ElectricityUsage {
+                kwh: k,
+                is_renewable: false,
+            });
+            let heating = gas.map(|m3| HeatingUsage::NaturalGas {
+                units_m3: m3,
+            });
+            Activity::HomeEnergy(EnergyDetails {
+                electricity,
+                heating,
+            })
+        },
+
+        Commands::Diet { protein, servings, waste } => {
+            let meat_servings = match protein.as_str() {
+                "none" => vec![],
+                source => {
+                    let category = match source {
+                        "beef"    => ProteinSource::Beef,
+                        "lamb"    => ProteinSource::Lamb,
+                        "poultry" => ProteinSource::Poultry,
+                        "pork"    => ProteinSource::Pork,
+                        "dairy"   => ProteinSource::Dairy,
+                        _         => {
+                            println!("Unknown protein. Use: beef, lamb, poultry, pork, dairy");
+                            return;
+                        }
+                    };
+                    vec![MeatData { category, servings_per_week: servings }]
+                }
+            };
+            Activity::Diet(DietDetails {
+                meat_servings,
+                food_waste_kg: waste,
+                local_food_ratio: 0.0,
+            })
+        },
+    };
+
+    let report = generate_report(&vec![activity]);
+
+    println!("Travel CO₂e:  {} kg", report.travel_co2e);
+    println!("Energy CO₂e:  {} kg", report.energy_co2e);
+    println!("Diet CO₂e:    {} kg", report.diet_co2e);
+    println!("Goods CO₂e:   {} kg", report.goods_co2e);
+    println!("Total CO₂e:   {} kg", report.total_co2e);
+
+    save_report_as_json(&report, "report.json");
 }
 
 #[cfg(test)] // "only compile this when running tests"

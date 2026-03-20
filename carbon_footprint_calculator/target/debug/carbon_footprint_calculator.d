@@ -1,0 +1,1 @@
+C:\Users\NetzenceBD\Desktop\Desktop\carbon_footprint\carbon_footprint_calculator\target\debug\carbon_footprint_calculator.exe: C:\Users\NetzenceBD\Desktop\Desktop\carbon_footprint\carbon_footprint_calculator\src\main.rs
