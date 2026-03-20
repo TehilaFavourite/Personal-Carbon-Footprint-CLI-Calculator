@@ -20,6 +20,7 @@ mod emission_factors {
     pub const POULTRY_KG_PER_SERVING: f64 = 0.7;
     pub const PORK_KG_PER_SERVING: f64 = 0.7;
     pub const DAIRY_KG_PER_SERVING: f64 = 0.4;
+    pub const FOOD_WASTE_KG_PER_KG: f64 = 0.5;
 }
 
 #[derive(Debug, Clone)]
@@ -201,6 +202,34 @@ fn calculate_energy_co2e(details: &EnergyDetails) -> f64 {
     electricity_co2e + heating_co2e
 }
 
+fn calculate_diet_co2e(details: &DietDetails) -> f64 {
+    // --- meat and dairy servings ---
+
+    let meat_co2e: f64 = details
+        .meat_servings
+        .iter()
+        .map(|item| {
+            let factor = match item.category {
+                ProteinSource::Beef => emission_factors::BEEF_KG_PER_SERVING,
+                ProteinSource::Lamb => emission_factors::LAMB_KG_PER_SERVING,
+                ProteinSource::Poultry => emission_factors::POULTRY_KG_PER_SERVING,
+                ProteinSource::Pork => emission_factors::PORK_KG_PER_SERVING,
+                ProteinSource::Dairy => emission_factors::DAIRY_KG_PER_SERVING,
+            };
+            item.servings_per_week * factor
+        })
+        .sum();
+
+    // --- food waste ---
+    let waste_co2e = details.food_waste_kg * emission_factors::FOOD_WASTE_KG_PER_KG;
+
+    // --- apply local food reduction ---
+    let local_reduction = 1.0 - (details.local_food_ratio * 0.1);
+
+    // --- Add it all up and apply the reduction ---
+    (meat_co2e + waste_co2e) * local_reduction
+}
+
 fn main() {
     println!("Hello, world!");
 }
@@ -255,12 +284,45 @@ mod tests {
     fn test_natural_gas_only() {
         let details = EnergyDetails {
             electricity: None,
-            heating: Some(HeatingUsage::NaturalGas {
-                units_m3: 50.0
-            }),
+            heating: Some(HeatingUsage::NaturalGas { units_m3: 50.0 }),
         };
         let result = calculate_energy_co2e(&details);
-        assert!((result - 101.0).abs() < 0.01,
-    "Expected 101.0, got {}", result);
+        assert!(
+            (result - 101.0).abs() < 0.01,
+            "Expected 101.0, got {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_beef_only() {
+        let details = DietDetails {
+            meat_servings: vec![MeatData {
+                category: ProteinSource::Beef,
+                servings_per_week: 2.0,
+            }],
+            food_waste_kg: 0.0,
+            local_food_ratio: 0.0,
+        };
+        let result = calculate_diet_co2e(&details);
+        // 2.0 servings × 3.3 kg/serving = 6.6
+        assert!((result - 6.6).abs() < 0.01, "Expected 6.6, got {}", result);
+    }
+
+    #[test]
+    fn test_poultry_with_waste() {
+        let details = DietDetails {
+            meat_servings: vec![MeatData {
+                category: ProteinSource::Poultry,
+                servings_per_week: 4.0,
+            }],
+            food_waste_kg: 10.0,
+            local_food_ratio: 0.0,
+        };
+        let result = calculate_diet_co2e(&details);
+        // meat:  4.0 × 0.7 = 2.8
+        // waste: 10.0 × 0.5 = 5.0
+        // total: 7.8
+        assert!((result - 7.8).abs() < 0.01, "Expected 7.8, got {}", result);
     }
 }
