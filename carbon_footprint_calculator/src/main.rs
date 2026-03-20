@@ -21,6 +21,22 @@ mod emission_factors {
     pub const PORK_KG_PER_SERVING: f64 = 0.7;
     pub const DAIRY_KG_PER_SERVING: f64 = 0.4;
     pub const FOOD_WASTE_KG_PER_KG: f64 = 0.5;
+
+    // --- Consumer Goods ---
+    pub const CLOTHING_FAST_FASHION_KG: f64 = 10.0; // per piece
+    pub const CLOTHING_NORMAL_KG: f64 = 5.0; // per piece
+    pub const ELECTRONICS_PHONE_KG: f64 = 70.0;
+    pub const ELECTRONICS_LAPTOP_KG: f64 = 300.0;
+    pub const ELECTRONICS_APPLIANCE_KG: f64 = 400.0;
+    pub const HOUSEHOLD_ITEM_KG: f64 = 50.0;
+
+    // --- Waste (kg CO₂e per kg of waste) ---
+    pub const WASTE_LANDFILL_KG_PER_KG: f64 = 0.5;
+    pub const WASTE_RECYCLE_KG_PER_KG: f64 = 0.1;
+    pub const WASTE_COMPOST_KG_PER_KG: f64 = 0.05;
+
+    // --- Digital ---
+    pub const DIGITAL_KG_PER_GB: f64 = 0.036;
 }
 
 #[derive(Debug, Clone)]
@@ -132,6 +148,15 @@ struct WasteEntry {
     weight_kg: f64,
 }
 
+#[derive(Debug, Clone)]
+struct CarbonReport {
+    travel_co2e: f64,
+    energy_co2e: f64,
+    diet_co2e: f64,
+    goods_co2e: f64,
+    total_co2e: f64,
+}
+
 fn calculate_travel_co2e(details: &TravelDetails) -> f64 {
     match &details.mode {
         TransportMode::Car {
@@ -230,6 +255,93 @@ fn calculate_diet_co2e(details: &DietDetails) -> f64 {
     (meat_co2e + waste_co2e) * local_reduction
 }
 
+fn calculate_goods_co2e(details: &GoodsDetails) -> f64 {
+    // --- purchases ---
+    // Loop through each Purchase in the Vec
+    // match on which kind it is
+    // return a CO₂ number for each one
+    // sum them all up
+    let purchases_co2e: f64 = details
+        .purchases
+        .iter()
+        .map(|purchase| match purchase {
+            Purchase::Clothing {
+                pieces,
+                is_fast_fashion,
+            } => {
+                let kg_per_piece = if *is_fast_fashion {
+                    emission_factors::CLOTHING_FAST_FASHION_KG
+                } else {
+                    emission_factors::CLOTHING_NORMAL_KG
+                };
+                // *pieces is u32, we need f64 for maths
+                // "as f64" converts it
+                (*pieces as f64) * kg_per_piece
+            }
+
+            Purchase::Electronics { device_type } => match device_type {
+                DeviceType::SmartPhone => emission_factors::ELECTRONICS_PHONE_KG,
+                DeviceType::Laptop => emission_factors::ELECTRONICS_LAPTOP_KG,
+                DeviceType::LargeAppliance => emission_factors::ELECTRONICS_APPLIANCE_KG,
+            },
+
+            Purchase::HouseholdItem => emission_factors::HOUSEHOLD_ITEM_KG,
+        })
+        .sum();
+
+    // --- waste ---
+    // Same pattern — loop, match, multiply, sum
+    let waste_co2e: f64 = details
+        .waste
+        .iter()
+        .map(|entry| {
+            let factor = match entry.category {
+                WasteType::Landfill => emission_factors::WASTE_LANDFILL_KG_PER_KG,
+                WasteType::Recycle => emission_factors::WASTE_RECYCLE_KG_PER_KG,
+                WasteType::Compost => emission_factors::WASTE_COMPOST_KG_PER_KG,
+            };
+            entry.weight_kg * factor
+        })
+        .sum();
+
+    // --- digital usage ---
+    let digital_co2e = details.digital_usage_gb * emission_factors::DIGITAL_KG_PER_GB;
+
+    purchases_co2e + waste_co2e + digital_co2e
+}
+
+fn generate_report(activities: &Vec<Activity>) -> CarbonReport {
+    let mut travel_co2e = 0.0;
+    let mut energy_co2e = 0.0;
+    let mut diet_co2e = 0.0;
+    let mut goods_co2e = 0.0;
+
+    for activity in activities {
+        match activity {
+            Activity::Travel(details) => {
+                travel_co2e += calculate_travel_co2e(details);
+            }
+            Activity::HomeEnergy(details) => {
+                energy_co2e += calculate_energy_co2e(details);
+            }
+            Activity::Diet(details) => {
+                diet_co2e += calculate_diet_co2e(details);
+            }
+            Activity::ConsumerGoods(details) => {
+                goods_co2e += calculate_goods_co2e(details);
+            }
+        }
+    }
+
+    CarbonReport {
+        travel_co2e,
+        energy_co2e,
+        diet_co2e,
+        goods_co2e,
+        total_co2e: travel_co2e + energy_co2e + diet_co2e + goods_co2e,
+    }
+}
+
 fn main() {
     println!("Hello, world!");
 }
@@ -324,5 +436,84 @@ mod tests {
         // waste: 10.0 × 0.5 = 5.0
         // total: 7.8
         assert!((result - 7.8).abs() < 0.01, "Expected 7.8, got {}", result);
+    }
+
+    #[test]
+    fn test_fast_fashion_clothing() {
+        let details = GoodsDetails {
+            purchases: vec![Purchase::Clothing {
+                pieces: 2,
+                is_fast_fashion: true,
+            }],
+            waste: vec![],
+            digital_usage_gb: 0.0,
+        };
+        let result = calculate_goods_co2e(&details);
+        // 2 pieces × 10.0 kg/piece = 20.0
+        assert!(
+            (result - 20.0).abs() < 0.01,
+            "Expected 20.0, got {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_electronic_goods() {
+        let details = GoodsDetails {
+            purchases: vec![Purchase::Electronics {
+                device_type: DeviceType::Laptop,
+            }],
+            waste: vec![],
+            digital_usage_gb: 0.0,
+        };
+        let result = calculate_goods_co2e(&details);
+        // 2 pieces × 10.0 kg/piece = 20.0
+        assert!(
+            (result - 300.0).abs() < 0.01,
+            "Expected 300.0, got {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_generate_report() {
+        let activities = vec![
+            Activity::Travel(TravelDetails {
+                distance_km: 100.0,
+                mode: TransportMode::Car {
+                    fuel_type: FuelType::Petrol,
+                    consumption_l_per_100km: 8.0,
+                },
+            }),
+            Activity::Diet(DietDetails {
+                meat_servings: vec![MeatData {
+                    category: ProteinSource::Beef,
+                    servings_per_week: 2.0,
+                }],
+                food_waste_kg: 0.0,
+                local_food_ratio: 0.0,
+            }),
+        ];
+
+        let report = generate_report(&activities);
+
+        // travel: 18.48
+        // diet:   6.6
+        // total:  25.08
+        assert!(
+            (report.travel_co2e - 18.48).abs() < 0.01,
+            "Travel: expected 18.48, got {}",
+            report.travel_co2e
+        );
+        assert!(
+            (report.diet_co2e - 6.6).abs() < 0.01,
+            "Diet: expected 6.6, got {}",
+            report.diet_co2e
+        );
+        assert!(
+            (report.total_co2e - 25.08).abs() < 0.01,
+            "Total: expected 25.08, got {}",
+            report.total_co2e
+        );
     }
 }
