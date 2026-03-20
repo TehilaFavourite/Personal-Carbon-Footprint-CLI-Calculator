@@ -131,6 +131,37 @@ struct WasteEntry {
     weight_kg: f64,
 }
 
+fn calculate_travel_co2e(details: &TravelDetails) -> f64 {
+    match &details.mode {
+        TransportMode::Car { fuel_type, consumption_l_per_100km} => {
+            // How many did the trip use?
+            let litres = (details.distance_km / 100.0 ) * consumption_l_per_100km;
+
+            // which emission factor applies to this fuel?
+            let kg_per_litre = match fuel_type {
+                FuelType::Petrol   => emission_factors::PETROL_KG_PER_LITRE,
+                FuelType::Diesel   => emission_factors::DIESEL_KG_PER_LITRE,
+                FuelType::Electric => emission_factors::ELECTRIC_KG_PER_KWH,
+            };
+
+            litres * kg_per_litre
+        },
+
+        TransportMode::Flight { is_long_haul } => {
+            let factor = if *is_long_haul {
+                emission_factors::FLIGHT_LONG_HAUL_KG_PER_KM
+            } else {
+                emission_factors::FLIGHT_SHORT_HAUL_KG_PER_KM
+            };
+            details.distance_km * factor
+        },
+
+        TransportMode::PublicTransport => {
+            details.distance_km * emission_factors::PUBLIC_TRANSPORT_KG_PER_KM
+        },
+    }
+}
+
 fn main() {
     println!("Hello, world!");
 }
